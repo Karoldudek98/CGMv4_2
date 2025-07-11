@@ -1,4 +1,3 @@
-// lib/screens/chart_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -27,6 +26,7 @@ class _ChartScreenState extends State<ChartScreen> {
 
   void _fetchChartData() {
     setState(() {
+      // Pobieramy dane historyczne dla wybranego zakresu czasu (np. 2h, 8h, 16h, 24h)
       _historicalDataFuture = Provider.of<NightscoutDataService>(context, listen: false)
           .fetchHistoricalData(Duration(hours: _selectedTimeRangeHours));
     });
@@ -38,12 +38,21 @@ class _ChartScreenState extends State<ChartScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Pobieramy szerokość ekranu
     final double screenWidth = MediaQuery.of(context).size.width;
-    const double horizontalPadding = 16.0;
-    const double chartHorizontalMargin = 32.0; // 2 * 16.0 (lewy i prawy padding)
+    // Definiujemy stałe marginesy poziome dla wykresu
+    const double horizontalPadding = 16.0; // Padding wewnątrz SingleChildScrollView
+    const double chartHorizontalMargin = 32.0; // Całkowity margines na zewnątrz wykresu (lewy + prawy padding Scaffold)
 
+    // Obliczamy szerokość dostępną dla samego wykresu, gdy wyświetlamy 2 godziny danych
     final double baseChartDisplayWidth = screenWidth - chartHorizontalMargin;
+    
+    // Obliczamy stały współczynnik "pikseli na godzinę".
+    // Dla 2 godzin wykres ma dokładnie wypełniać dostępną szerokość.
     final double pixelsPerHour = baseChartDisplayWidth / 2.0; 
+
+    // Obliczamy ostateczną szerokość zawartości wykresu. 
+    // Dłuższe zakresy (8h, 16h, 24h) będą proporcjonalnie szersze i przewijalne.
     final double chartContentWidth = _selectedTimeRangeHours * pixelsPerHour;
 
     return Scaffold(
@@ -123,18 +132,24 @@ class _ChartScreenState extends State<ChartScreen> {
                 } else {
                   final List<SgvEntry> data = snapshot.data!;
 
+                  // Sortowanie danych, choć Nightscout API powinno już zwracać posortowane
                   data.sort((a, b) => a.date.compareTo(b.date));
 
+                  // Jeśli dane są puste, nadal obsługa błędu
                   if (data.isEmpty) {
                     return const Center(child: Text('Brak danych do wyświetlenia wykresu.'));
                   }
                   
+                  // Ustalanie zakresów osi Y (glikemii) dynamicznie
+                  // Zapewnij minimum 0 dla osi Y i dodaj bufor 10 jednostek
                   final double minY = (data.map((e) => e.sgv).reduce(min) - 10).floorToDouble();
                   final double maxY = (data.map((e) => e.sgv).reduce(max) + 10).ceilToDouble();
 
+                  // Ustalanie zakresów osi X (czasu) - KLUCZOWE: od teraz minus zakres, do teraz
                   final double minX = DateTime.now().subtract(Duration(hours: _selectedTimeRangeHours)).millisecondsSinceEpoch.toDouble();
                   final double maxX = DateTime.now().millisecondsSinceEpoch.toDouble();
 
+                  // Konwersja danych SGV na punkty FlSpot dla wykresu
                   List<FlSpot> spots = data.map((entry) {
                     return FlSpot(
                       entry.date.millisecondsSinceEpoch.toDouble(),
@@ -145,7 +160,7 @@ class _ChartScreenState extends State<ChartScreen> {
                   return SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: SizedBox(
-                      width: chartContentWidth,
+                      width: chartContentWidth, // Używamy dynamicznie obliczonej szerokości
                       child: Padding(
                         padding: const EdgeInsets.all(horizontalPadding),
                         child: LineChart(
@@ -177,27 +192,31 @@ class _ChartScreenState extends State<ChartScreen> {
                                     String format;
                                     int intervalMinutes;
                                     
+                                    // Dostosowanie interwałów wyświetlania etykiet w zależności od zakresu czasu
                                     if (_selectedTimeRangeHours <= 2) {
-                                      intervalMinutes = 15; 
+                                      intervalMinutes = 15; // Co 15 minut dla 2h
                                     } else if (_selectedTimeRangeHours <= 8) {
-                                      intervalMinutes = 60; 
+                                      intervalMinutes = 60; // Co 1 godzinę dla 8h
                                     } else if (_selectedTimeRangeHours <= 16) {
-                                      intervalMinutes = 120; 
-                                    } else { 
-                                      intervalMinutes = 240; 
+                                      intervalMinutes = 120; // Co 2 godziny dla 16h
+                                    } else { // 24h
+                                      intervalMinutes = 240; // Co 4 godziny dla 24h
                                     }
 
-                                    bool isFirstOrLast = (value - minX).abs() < 1000 || (value - maxX).abs() < 1000; 
+                                    // Sprawdź, czy czas jest wielokrotnością interwału
+                                    // Dodatkowo, zawsze wyświetlaj pierwszy i ostatni punkt na osi X
+                                    bool isFirstOrLast = (value - minX).abs() < 1000 || (value - maxX).abs() < 1000; // Tolerancja dla float
                                     bool isIntervalMark = dateTime.minute % intervalMinutes == 0 && dateTime.second == 0;
 
                                     if (isIntervalMark || isFirstOrLast) {
+                                      // Jeśli czas jest blisko pełnej godziny, użyj HH:00, inaczej HH:mm
                                       if (dateTime.minute == 0 && dateTime.second == 0) {
                                          format = DateFormat('HH:00').format(dateTime.toLocal());
                                       } else {
                                          format = DateFormat('HH:mm').format(dateTime.toLocal());
                                       }
                                     } else {
-                                      return const SizedBox.shrink();
+                                      return const SizedBox.shrink(); // Ukryj etykietę
                                     }
 
                                     return SideTitleWidget(
@@ -215,15 +234,24 @@ class _ChartScreenState extends State<ChartScreen> {
                                 sideTitles: SideTitles(
                                   showTitles: true,
                                   getTitlesWidget: (value, meta) {
-                                    if (value % 50 == 0) {
+                                    // Wyświetlaj etykiety co 25 jednostek
+                                    // Dodatkowo, zawsze wyświetlaj etykiety dla linii progowych, jeśli są blisko
+                                    final bool isThresholdHigh = (value - AppConfig.highGlucoseThreshold).abs() < 5;
+                                    final bool isThresholdLow = (value - AppConfig.lowGlucoseThreshold).abs() < 5;
+
+                                    if (value % 25 == 0 || isThresholdHigh || isThresholdLow) {
+                                      // Zapewnij, że etykieta nie będzie ujemna, jeśli minY jest niższe
+                                      final int displayValue = value.toInt();
+                                      if (displayValue < 0) return const SizedBox.shrink(); // Ukryj ujemne etykiety
+                                      
                                       return Text(
-                                        value.toInt().toString(),
+                                        displayValue.toString(),
                                         style: const TextStyle(fontSize: 10, color: Colors.black54),
                                       );
                                     }
-                                    return const SizedBox.shrink();
+                                    return const SizedBox.shrink(); // Ukryj pozostałe etykiety
                                   },
-                                  interval: 20,
+                                  interval: 25, // Ustaw interwał co 25 jednostek
                                   reservedSize: 40,
                                 ),
                               ),
@@ -236,7 +264,7 @@ class _ChartScreenState extends State<ChartScreen> {
                             ),
                             minX: minX,
                             maxX: maxX,
-                            minY: minY < 0 ? 0 : minY,
+                            minY: minY < 0 ? 0 : minY, // Zapewnij, że min Y nie będzie ujemne
                             maxY: maxY,
                             lineBarsData: [
                               LineChartBarData(
@@ -307,7 +335,7 @@ class _ChartScreenState extends State<ChartScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         child: Text(text),
-      ), // Brakowało tego nawiasu zamykającego widget ElevatedButton
+      ),
     );
   }
 }
