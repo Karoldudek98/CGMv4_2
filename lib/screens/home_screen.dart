@@ -2,17 +2,45 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:cgmv4/services/nightscout_data_service.dart';
-import 'package:cgmv4/config/app_config.dart';
 
-class HomeScreen extends StatelessWidget {
+import 'package:cgmv4/services/nightscout_data_service.dart';
+import 'package:cgmv4/services/settings_service.dart'; // Import SettingsService
+import 'package:cgmv4/models/glucose_unit.dart'; // Import GlucoseUnit
+
+/// Ekran główny wyświetlający aktualną wartość glikemii i powiązane informacje.
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Przy wznowieniu aplikacji z tła, wymuś odświeżenie danych.
+    if (state == AppLifecycleState.resumed) {
+      Provider.of<NightscoutDataService>(context, listen: false).fetchNightscoutData();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('CGMv4'),
+        title: const Text('Aktualna Glikemia'),
         centerTitle: true,
         actions: [
           IconButton(
@@ -23,15 +51,12 @@ class HomeScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: Consumer<NightscoutDataService>(
-        builder: (context, nightscoutDataService, child) {
-          if (nightscoutDataService.isLoading && nightscoutDataService.latestSgv == null) {
+      // Używamy Consumer2, aby nasłuchiwać zmian zarówno w NightscoutDataService, jak i SettingsService.
+      body: Consumer2<NightscoutDataService, SettingsService>(
+        builder: (context, nightscoutService, settingsService, child) {
+          if (nightscoutService.isLoading) {
             return const Center(child: CircularProgressIndicator());
-          }
-
-          final sgv = nightscoutDataService.latestSgv;
-
-          if (sgv == null) {
+          } else if (nightscoutService.errorMessage != null) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -41,117 +66,111 @@ class HomeScreen extends StatelessWidget {
                     const Icon(Icons.error_outline, color: Colors.red, size: 80),
                     const SizedBox(height: 20),
                     Text(
-                      'Brak danych glikemii. Sprawdź konfigurację Nightscout w config/app_config.dart oraz połączenie z internetem.',
+                      'Błąd: ${nightscoutService.errorMessage}',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 20, color: Colors.grey.shade700),
+                      style: const TextStyle(fontSize: 18, color: Colors.red),
                     ),
                     const SizedBox(height: 20),
                     ElevatedButton(
-                      onPressed: () => nightscoutDataService.fetchNightscoutData(),
-                      child: const Text('Odśwież dane'),
+                      onPressed: () {
+                        nightscoutService.fetchNightscoutData();
+                      },
+                      child: const Text('Spróbuj ponownie'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          } else if (nightscoutService.latestSgv == null) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.grey, size: 80),
+                    SizedBox(height: 20),
+                    Text(
+                      'Brak danych SGV. Upewnij się, że Nightscout działa i ma dane.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 20, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          } else {
+            final sgvEntry = nightscoutService.latestSgv!;
+            final glucoseUnit = settingsService.currentGlucoseUnit;
+
+            // Konwersja wartości SGV na wybraną jednostkę do wyświetlenia.
+            final double displaySgv = settingsService.convertSgvToCurrentUnit(sgvEntry.sgv);
+            final String unitText = glucoseUnit == GlucoseUnit.mgDl ? 'mg/dL' : 'mmol/L';
+
+            // Obliczenie delty w odpowiedniej jednostce.
+            double? displayDelta;
+            if (nightscoutService.glucoseDelta != null) {
+              // Delta też musi być skonwertowana, ale operujemy na wartości bezwzględnej dla wyświetlania.
+              displayDelta = settingsService.convertSgvToCurrentUnit(nightscoutService.glucoseDelta!.abs());
+            }
+
+            // Pobranie progów alertów w odpowiedniej jednostce do wizualizacji tła.
+            final double lowThreshold = settingsService.lowGlucoseThreshold;
+            final double highThreshold = settingsService.highGlucoseThreshold;
+
+            // Ustalenie koloru tła w zależności od wartości SGV względem progów.
+            Color backgroundColor;
+            if (displaySgv < lowThreshold) {
+              backgroundColor = Colors.orange.shade100;
+            } else if (displaySgv > highThreshold) {
+              backgroundColor = Colors.red.shade100;
+            } else {
+              backgroundColor = Colors.green.shade100;
+            }
+
+            return Container(
+              color: backgroundColor,
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    Text(
+                      'Ostatni odczyt ($unitText):',
+                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      // Formatowanie liczby dziesiętnej w zależności od jednostki (0 miejsc dla mg/dL, 1 dla mmol/L)
+                      displaySgv.toStringAsFixed(glucoseUnit == GlucoseUnit.mgDl ? 0 : 1),
+                      style: TextStyle(
+                        fontSize: 80,
+                        fontWeight: FontWeight.bold,
+                        // Kolor tekstu dla wartości poza zakresem.
+                        color: displaySgv < lowThreshold || displaySgv > highThreshold ? Colors.red : Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (nightscoutService.glucoseDelta != null)
+                      Text(
+                        // Wyświetlanie delty ze znakiem i w odpowiednich jednostkach.
+                        'Zmiana: ${nightscoutService.glucoseDelta! > 0 ? '+' : ''}${displayDelta!.toStringAsFixed(glucoseUnit == GlucoseUnit.mgDl ? 0 : 1)} $unitText',
+                        style: const TextStyle(fontSize: 28),
+                      ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Kierunek: ${sgvEntry.direction}',
+                      style: const TextStyle(fontSize: 24),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Ostatnie odświeżenie: ${DateFormat('HH:mm:ss').format(sgvEntry.date.toLocal())}',
+                      style: const TextStyle(fontSize: 18, color: Colors.black54),
                     ),
                   ],
                 ),
               ),
             );
           }
-
-          final String formattedTime = DateFormat('HH:mm').format(sgv.date.toLocal());
-          Color sgvColor = Colors.grey;
-          if (sgv.sgv > AppConfig.highGlucoseThreshold) {
-            sgvColor = Colors.red;
-          } else if (sgv.sgv < AppConfig.lowGlucoseThreshold) {
-            sgvColor = Colors.orange;
-          } else {
-            sgvColor = Colors.green;
-          }
-
-          IconData trendIcon;
-          Color trendColor = Colors.black87; 
-          
-          final String? direction = nightscoutDataService.latestSgv?.direction;
-
-          switch (direction) {
-            case "DoubleUp":
-              trendIcon = Icons.keyboard_double_arrow_up;
-              trendColor = Colors.red;
-              break;
-            case "SingleUp":
-              trendIcon = Icons.arrow_upward;
-              trendColor = Colors.orange;
-              break;
-            case "FortyFiveUp":
-              trendIcon = Icons.north_east;
-              trendColor = Colors.orangeAccent;
-              break;
-            case "Flat":
-              trendIcon = Icons.arrow_right_alt;
-              trendColor = Colors.green;
-              break;
-            case "FortyFiveDown":
-              trendIcon = Icons.south_east;
-              trendColor = Colors.lightBlue;
-              break;
-            case "SingleDown":
-              trendIcon = Icons.arrow_downward;
-              trendColor = Colors.blue;
-              break;
-            case "DoubleDown":
-              trendIcon = Icons.keyboard_double_arrow_down;
-              trendColor = Colors.purple;
-              break;
-            default: // "NONE", "NotComputable", "RateOutOfRange" lub null
-              trendIcon = Icons.help_outline;
-              trendColor = Colors.grey;
-              break;
-          }
-
-          final delta = nightscoutDataService.glucoseDelta;
-          // ZMIANA: Formatowanie delty do liczby całkowitej
-          String deltaText = delta != null 
-              ? '${delta > 0 ? '+' : ''}${delta.round()}' // Użycie .round() do zaokrąglenia
-              : 'N/A';
-
-          return Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  sgv.sgv.toInt().toString(),
-                  style: TextStyle(
-                    fontSize: 120,
-                    fontWeight: FontWeight.bold,
-                    color: sgvColor,
-                  ),
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      trendIcon,
-                      size: 48,
-                      color: trendColor,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      deltaText,
-                      style: const TextStyle(
-                        fontSize: 48,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Ostatni odczyt: $formattedTime',
-                  style: const TextStyle(fontSize: 24, color: Colors.black54),
-                ),
-              ],
-            ),
-          );
         },
       ),
     );
