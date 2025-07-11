@@ -1,84 +1,113 @@
 // lib/screens/alerts_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart'; // Potrzebne do formatowania daty i czasu
+import 'package:intl/intl.dart';
 
 import 'package:cgmv4/services/nightscout_data_service.dart';
-import 'package:cgmv4/models/cgm_alert.dart'; // Import naszej klasy CgmAlert
+import 'package:cgmv4/models/cgm_alert.dart';
 
+/// Ekran wyświetlający listę alertów glikemii.
 class AlertsScreen extends StatelessWidget {
   const AlertsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // Używamy Consumera, aby AlertsScreen automatycznie reagował na zmiany w NightscoutDataService
-    return Consumer<NightscoutDataService>(
-      builder: (context, nightscoutService, child) {
-        final alerts = nightscoutService.alerts; // Pobieramy listę alertów
-
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Alerty'),
-            actions: [
-              // Przycisk do akceptacji wszystkich alertów
-              if (nightscoutService.hasUnreadAlerts) // Pokaż tylko, jeśli są nieprzeczytane alerty
-                TextButton(
-                  onPressed: () {
-                    nightscoutService.markAllAlertsAsRead();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Wszystkie alerty oznaczone jako przeczytane.')),
-                    );
-                  },
-                  child: const Text(
-                    'Akceptuj wszystkie',
-                    style: TextStyle(color: Colors.white),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Alerty Glikemii'),
+        centerTitle: true,
+      ),
+      body: Consumer<NightscoutDataService>(
+        builder: (context, nightscoutService, child) {
+          if (nightscoutService.alerts.isEmpty) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.notifications_off, color: Colors.grey, size: 80),
+                  SizedBox(height: 20),
+                  Text(
+                    'Brak aktywnych alertów.',
+                    style: TextStyle(fontSize: 20, color: Colors.grey),
+                    textAlign: TextAlign.center,
                   ),
-                ),
-            ],
-          ),
-          body: alerts.isEmpty // Jeśli lista alertów jest pusta
-              ? const Center(child: Text('Brak aktywnych alertów.'))
-              : ListView.builder(
-                  itemCount: alerts.length,
-                  itemBuilder: (context, index) {
-                    final alert = alerts[index]; // Pobierz pojedynczy alert
-                    return Card(
-                      margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                      color: alert.alertColor.withOpacity(0.9), // Kolor karty zależny od typu alertu
-                      elevation: 2, // Delikatny cień
-                      child: Padding(
-                        padding: const EdgeInsets.all(12.0),
+                ],
+              ),
+            );
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(8.0),
+            itemCount: nightscoutService.alerts.length,
+            itemBuilder: (context, index) {
+              final CgmAlert alert = nightscoutService.alerts[index];
+              return Card(
+                elevation: 2,
+                margin: const EdgeInsets.symmetric(vertical: 8.0),
+                color: alert.alertColor.withOpacity(0.2), // Kolor karty zależny od alertu
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Ikona alertu
+                      Icon(
+                        alert.type == "LOW" ? Icons.arrow_downward : Icons.arrow_upward,
+                        color: alert.alertColor,
+                        size: 36,
+                      ),
+                      const SizedBox(width: 16),
+                      // Treść alertu
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
                               alert.message,
-                              style: const TextStyle(
-                                fontSize: 16,
+                              style: TextStyle(
+                                fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.white,
+                                color: alert.alertColor.darken(0.2), // Nieco ciemniejszy kolor tekstu
                               ),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              // Formatowanie czasu alertu do lokalnej strefy czasowej
-                              'Czas: ${DateFormat('HH:mm:ss dd.MM').format(alert.timestamp.toLocal())}',
-                              style: const TextStyle(fontSize: 12, color: Colors.white70),
+                              DateFormat('dd.MM.yyyy HH:mm').format(alert.timestamp.toLocal()),
+                              style: const TextStyle(fontSize: 14, color: Colors.black54),
                             ),
-                            // Ikona "nowy" dla nieprzeczytanych alertów
-                            if (!alert.isRead)
-                              const Align(
-                                alignment: Alignment.bottomRight,
-                                child: Icon(Icons.new_releases, color: Colors.yellowAccent, size: 20),
-                              ),
                           ],
                         ),
                       ),
-                    );
-                  },
+                      // Przycisk "Usuń"
+                      IconButton(
+                        icon: const Icon(Icons.delete_forever, color: Colors.grey),
+                        onPressed: () {
+                          // Wywołaj metodę usuwającą alert z serwisu
+                          nightscoutService.removeAlert(alert);
+                          // Opcjonalnie: pokaż snackbar z potwierdzeniem usunięcia
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Alert usunięty')),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
-        );
-      },
+              );
+            },
+          );
+        },
+      ),
     );
+  }
+}
+
+// Rozszerzenie dla Color, aby móc nieco przyciemnić kolor tekstu alertu
+extension ColorExtension on Color {
+  Color darken([double amount = .1]) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(this);
+    final hslDark = hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0));
+    return hslDark.toColor();
   }
 }

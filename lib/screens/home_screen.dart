@@ -4,8 +4,8 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 
 import 'package:cgmv4/services/nightscout_data_service.dart';
-import 'package:cgmv4/services/settings_service.dart'; // Import SettingsService
-import 'package:cgmv4/models/glucose_unit.dart'; // Import GlucoseUnit
+import 'package:cgmv4/services/settings_service.dart';
+import 'package:cgmv4/models/glucose_unit.dart';
 
 /// Ekran główny wyświetlający aktualną wartość glikemii i powiązane informacje.
 class HomeScreen extends StatefulWidget {
@@ -30,9 +30,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Przy wznowieniu aplikacji z tła, wymuś odświeżenie danych.
     if (state == AppLifecycleState.resumed) {
       Provider.of<NightscoutDataService>(context, listen: false).fetchNightscoutData();
+    }
+  }
+
+  /// Mapuje tekstowy kierunek glikemii na symbol strzałki Unicode.
+  String _mapDirectionToArrow(String direction) {
+    switch (direction.toLowerCase()) {
+      case 'doubleup':
+        return '⇈'; // Podwójny wzrost
+      case 'singleup':
+        return '↑'; // Pojedynczy wzrost
+      case 'fortyfiveup':
+        return '↗'; // Wzrost pod kątem 45 stopni
+      case 'flat':
+        return '→'; // Płasko
+      case 'fortyfivedown':
+        return '↘'; // Spadek pod kątem 45 stopni
+      case 'singledown':
+        return '↓'; // Pojedynczy spadek
+      case 'doubledown':
+        return '⇊'; // Podwójny spadek
+      case 'not computable':
+      case 'none':
+      case 'unknown':
+      default:
+        return ''; // Brak symbolu dla nieznanych
     }
   }
 
@@ -51,12 +75,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
-      // Używamy Consumer2, aby nasłuchiwać zmian zarówno w NightscoutDataService, jak i SettingsService.
       body: Consumer2<NightscoutDataService, SettingsService>(
         builder: (context, nightscoutService, settingsService, child) {
-          if (nightscoutService.isLoading) {
+          if (nightscoutService.isLoading && nightscoutService.latestSgv == null) {
+            // Wyświetlaj CircularProgressIndicator tylko, gdy nic nie ma i trwa ładowanie
             return const Center(child: CircularProgressIndicator());
-          } else if (nightscoutService.errorMessage != null) {
+          } else if (nightscoutService.errorMessage != null && nightscoutService.latestSgv == null) {
+            // Wyświetlaj błąd tylko, gdy nic nie ma i jest błąd
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -82,6 +107,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             );
           } else if (nightscoutService.latestSgv == null) {
+            // Gdy nie ma danych i nie ma błędu ładowania (np. po restarcie przed pierwszym pobraniem)
+            // Uruchomienie fetchNightscoutData() w initState powinno to obsłużyć,
+            // ale ten stan może wystąpić, jeśli Nightscout jest pusty.
             return const Center(
               child: Padding(
                 padding: EdgeInsets.all(16.0),
@@ -100,25 +128,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             );
           } else {
+            // Mamy dane SGV do wyświetlenia
             final sgvEntry = nightscoutService.latestSgv!;
             final glucoseUnit = settingsService.currentGlucoseUnit;
 
-            // Konwersja wartości SGV na wybraną jednostkę do wyświetlenia.
             final double displaySgv = settingsService.convertSgvToCurrentUnit(sgvEntry.sgv);
             final String unitText = glucoseUnit == GlucoseUnit.mgDl ? 'mg/dL' : 'mmol/L';
 
-            // Obliczenie delty w odpowiedniej jednostce.
-            double? displayDelta;
+            String deltaText = '';
             if (nightscoutService.glucoseDelta != null) {
-              // Delta też musi być skonwertowana, ale operujemy na wartości bezwzględnej dla wyświetlania.
-              displayDelta = settingsService.convertSgvToCurrentUnit(nightscoutService.glucoseDelta!.abs());
+              final double displayDelta = settingsService.convertSgvToCurrentUnit(nightscoutService.glucoseDelta!);
+              if (displayDelta != 0.0) { // Tylko jeśli delta nie jest zerowa
+                // Formatowanie delty: znak i zaokrąglenie
+                deltaText = ' (${displayDelta > 0 ? '+' : ''}${displayDelta.toStringAsFixed(glucoseUnit == GlucoseUnit.mgDl ? 0 : 1)})';
+              }
             }
-
-            // Pobranie progów alertów w odpowiedniej jednostce do wizualizacji tła.
+            
+            // Kolor tła w zależności od wartości SGV względem progów.
             final double lowThreshold = settingsService.lowGlucoseThreshold;
             final double highThreshold = settingsService.highGlucoseThreshold;
-
-            // Ustalenie koloru tła w zależności od wartości SGV względem progów.
             Color backgroundColor;
             if (displaySgv < lowThreshold) {
               backgroundColor = Colors.orange.shade100;
@@ -139,27 +167,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 10),
-                    Text(
-                      // Formatowanie liczby dziesiętnej w zależności od jednostki (0 miejsc dla mg/dL, 1 dla mmol/L)
-                      displaySgv.toStringAsFixed(glucoseUnit == GlucoseUnit.mgDl ? 0 : 1),
-                      style: TextStyle(
-                        fontSize: 80,
-                        fontWeight: FontWeight.bold,
-                        // Kolor tekstu dla wartości poza zakresem.
-                        color: displaySgv < lowThreshold || displaySgv > highThreshold ? Colors.red : Colors.black,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    if (nightscoutService.glucoseDelta != null)
-                      Text(
-                        // Wyświetlanie delty ze znakiem i w odpowiednich jednostkach.
-                        'Zmiana: ${nightscoutService.glucoseDelta! > 0 ? '+' : ''}${displayDelta!.toStringAsFixed(glucoseUnit == GlucoseUnit.mgDl ? 0 : 1)} $unitText',
-                        style: const TextStyle(fontSize: 28),
-                      ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Kierunek: ${sgvEntry.direction}',
-                      style: const TextStyle(fontSize: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.baseline, // Wyrównanie linii bazowej tekstu
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(
+                          _mapDirectionToArrow(sgvEntry.direction), // Strzałka kierunku
+                          style: const TextStyle(fontSize: 50, color: Colors.black54),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          displaySgv.toStringAsFixed(glucoseUnit == GlucoseUnit.mgDl ? 0 : 1),
+                          style: TextStyle(
+                            fontSize: 80,
+                            fontWeight: FontWeight.bold,
+                            color: displaySgv < lowThreshold || displaySgv > highThreshold ? Colors.red : Colors.black,
+                          ),
+                        ),
+                        if (deltaText.isNotEmpty) // Wyświetlaj deltę tylko, jeśli nie jest pusta
+                          Text(
+                            deltaText,
+                            style: const TextStyle(fontSize: 30, fontWeight: FontWeight.normal, color: Colors.black54),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 10),
                     Text(

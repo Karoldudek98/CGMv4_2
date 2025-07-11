@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cgmv4/config/app_config.dart';
 import 'package:cgmv4/models/sgv_entry.dart';
 import 'package:cgmv4/models/cgm_alert.dart';
-import 'package:cgmv4/services/settings_service.dart'; // Import SettingsService
+import 'package:cgmv4/services/settings_service.dart';
 
 /// Serwis do pobierania danych glikemii z Nightscout API i zarządzania alertami.
 class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
@@ -19,42 +19,36 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
   String? _errorMessage;
   List<CgmAlert> _alerts = [];
   
-  DateTime? _lastProcessedSgvTimestamp; // Timestamp ostatniego przetworzonego SGV dla unikania duplikatów alertów
+  DateTime? _lastProcessedSgvTimestamp;
 
-  Timer? _refreshTimer; // Timer do cyklicznego odświeżania danych
+  Timer? _refreshTimer;
 
-  final SettingsService _settingsService; // Referencja do SettingsService
+  final SettingsService _settingsService;
 
-  // Gettery do dostępu do danych
   SgvEntry? get latestSgv => _latestSgv;
   double? get glucoseDelta => _glucoseDelta;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
   List<CgmAlert> get alerts => _alerts;
 
-  // Czy są nieprzeczytane alerty
   bool get hasUnreadAlerts => _alerts.any((alert) => !alert.isRead);
 
-  /// Konstruktor serwisu. Wymaga instancji SettingsService.
   NightscoutDataService(this._settingsService) {
     WidgetsBinding.instance.addObserver(this);
-    // Nasłuchuj zmian w SettingsService, aby reagować na zmiany progów glikemii.
     _settingsService.addListener(_onSettingsChanged);
     
+    // Zmieniamy kolejność: najpierw ładujemy alerty (dla _lastProcessedSgvTimestamp),
+    // POTEM pobieramy dane Nightscout.
     _loadAlerts().then((_) {
-      // Po załadowaniu alertów, ustaw timestamp ostatnio przetworzonego SGV,
-      // aby uniknąć ponownego generowania alertów dla tych samych danych po restarcie.
-      if (_alerts.isNotEmpty) {
-        _lastProcessedSgvTimestamp = _alerts.first.timestamp;
-      }
-      fetchNightscoutData(); // Pierwsze pobranie danych
-      _startRefreshTimer(); // Uruchomienie timera odświeżania
+      // Bez względu na to, czy były alerty, próbujemy pobrać dane od razu.
+      fetchNightscoutData();
+      _startRefreshTimer();
     });
   }
 
   @override
   void dispose() {
-    _settingsService.removeListener(_onSettingsChanged); // Usuń nasłuchiwanie
+    _settingsService.removeListener(_onSettingsChanged);
     _stopRefreshTimer();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -62,8 +56,8 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Reaguj na zmiany stanu cyklu życia aplikacji (np. wznowienie z tła)
     if (state == AppLifecycleState.resumed) {
+      // Po wznowieniu odśwież dane, aby były aktualne
       fetchNightscoutData();
       _startRefreshTimer();
     } else if (state == AppLifecycleState.paused) {
@@ -71,88 +65,100 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Reaguje na zmiany w SettingsService (np. zmianę progów lub jednostek).
   void _onSettingsChanged() {
     // Kiedy ustawienia się zmienią, warto ponownie sprawdzić aktualne dane
     // i ewentualnie wygenerować/zaktualizować alerty.
-    fetchNightscoutData();
+    // Upewnij się, że nie czyści to _lastProcessedSgvTimestamp,
+    // aby uniknąć ponownych alertów dla starych danych.
+    if (_latestSgv != null) {
+      _checkAndGenerateAlerts(_latestSgv!); // Ponownie sprawdz alerty z nowymi progami
+    }
+    notifyListeners(); // Powiadom o potencjalnych zmianach, np. kolorów na HomeScreen
   }
 
-  /// Rozpoczyna timer do cyklicznego odświeżania danych.
   void _startRefreshTimer() {
-    _refreshTimer?.cancel(); // Anuluj poprzedni timer, jeśli istnieje
+    _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(AppConfig.refreshDuration, (timer) {
-      fetchNightscoutData(); // Cyklicznie pobieraj dane
+      fetchNightscoutData();
     });
   }
 
-  /// Zatrzymuje timer odświeżania danych.
   void _stopRefreshTimer() {
     _refreshTimer?.cancel();
     _refreshTimer = null;
   }
 
   /// Pobiera najnowsze dane glikemii z Nightscout API.
+  /// Zawsze próbujemy pobrać co najmniej 2 wpisy, aby obliczyć deltę.
   Future<void> fetchNightscoutData() async {
-    if (_isLoading) return; // Zapobiegaj wielokrotnym zapytaniom
+    if (_isLoading) return;
 
     _isLoading = true;
     _errorMessage = null;
-    notifyListeners(); // Powiadom słuchaczy o rozpoczęciu ładowania
+    // Nie wywołuj notifyListeners() tutaj, aby uniknąć migotania "Loading"
+    // jeśli dane zostaną szybko pobrane i przetworzone.
+    // Zostanie wywołane na końcu bloku `finally`.
 
     try {
-      // Pobieramy 2 ostatnie wpisy do obliczenia delty i bieżącego SGV.
-      // Domyślnie Nightscout zwraca dane w mg/dL.
       final url = Uri.parse('${AppConfig.nightscoutApiBaseUrl}/api/v1/entries.json?count=2');
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         if (data.isNotEmpty) {
-          final SgvEntry currentSgv = SgvEntry.fromJson(data[0]);
+          final SgvEntry newLatestSgv = SgvEntry.fromJson(data[0]);
 
-          // Kluczowa logika zapobiegania dublowaniu alertów dla tego samego (już przetworzonego) czasu odczytu.
-          // Sprawdzamy, czy nowe SGV jest "nowsze" niż ostatnie, które przetworzyliśmy pod kątem alertów.
-          if (_lastProcessedSgvTimestamp != null && 
-              !currentSgv.date.isAfter(_lastProcessedSgvTimestamp!)) {
-            _isLoading = false;
-            // Jeśli dane nie są nowsze, nie ma potrzeby dalszego przetwarzania alertów.
-            return;
-          }
+          // Sprawdzamy, czy otrzymaliśmy faktycznie nowszy odczyt
+          if (_latestSgv == null || newLatestSgv.date.isAfter(_latestSgv!.date)) {
+            _previousSgv = _latestSgv; // Aktualne latestSgv staje się poprzednim
+            _latestSgv = newLatestSgv; // Nowy odczyt staje się najnowszym
 
-          _previousSgv = _latestSgv;
-          _latestSgv = currentSgv;
-          // Aktualizujemy czas ostatnio przetworzonego odczytu na czas właśnie przetworzonego SGV.
-          _lastProcessedSgvTimestamp = _latestSgv!.date; 
+            // Oblicz deltę, jeśli mamy co najmniej dwa odczyty
+            if (data.length >= 2) {
+              // Upewnij się, że _previousSgv jest aktualne lub pobierz z drugiego elementu listy
+              final SgvEntry potentialPreviousSgv = SgvEntry.fromJson(data[1]);
+              _glucoseDelta = _latestSgv!.sgv - potentialPreviousSgv.sgv;
+            } else {
+              _glucoseDelta = null; // Nie ma wystarczających danych do delty
+            }
 
-          if (_previousSgv != null) {
-            _glucoseDelta = _latestSgv!.sgv - _previousSgv!.sgv;
+            // Generujemy alert tylko dla *nowego* odczytu SGV, który nie był wcześniej przetworzony.
+            if (_lastProcessedSgvTimestamp == null || _latestSgv!.date.isAfter(_lastProcessedSgvTimestamp!)) {
+                _checkAndGenerateAlerts(_latestSgv!);
+                _lastProcessedSgvTimestamp = _latestSgv!.date; // Aktualizuj timestamp ostatnio przetworzonego
+            }
           } else {
-            _glucoseDelta = 0.0;
+            // Dane nie są nowsze, nie aktualizujemy _latestSgv, _previousSgv, ani _glucoseDelta
+            // Ale nadal możemy odświeżyć UI, jeśli błędy zniknęły lub coś innego się zmieniło.
+            // Sprawdzamy też alerty, bo progi mogły się zmienić
+            _checkAndGenerateAlerts(_latestSgv!);
           }
-
-          // Generujemy alert tylko dla *nowego* odczytu SGV.
-          _checkAndGenerateAlerts(_latestSgv!);
         } else {
           _errorMessage = 'Brak danych w odpowiedzi z Nightscout.';
+          _latestSgv = null; // Wyczyść dane, jeśli brak odpowiedzi
+          _previousSgv = null;
+          _glucoseDelta = null;
         }
       } else {
         _errorMessage = 'Błąd serwera Nightscout: ${response.statusCode}';
+        _latestSgv = null;
+        _previousSgv = null;
+        _glucoseDelta = null;
       }
     } catch (e) {
       _errorMessage = 'Błąd połączenia: $e';
+      _latestSgv = null;
+      _previousSgv = null;
+      _glucoseDelta = null;
     } finally {
       _isLoading = false;
       notifyListeners(); // Powiadom słuchaczy o zakończeniu ładowania (z sukcesem lub błędem)
     }
   }
 
-  /// Pobiera historyczne dane glikemii dla wykresu z Nightscout API.
-  /// Dane zawsze są zwracane w mg/dL z API.
+
   Future<List<SgvEntry>> fetchHistoricalData(Duration range) async {
-    // Obliczamy liczbę wpisów, aby pokryć dany zakres czasu (Nightscout domyślnie co 5 minut).
-    // Dodajemy mały bufor (+10), aby mieć pewność, że pokryjemy cały zakres.
-    final int count = (range.inMinutes / 5).ceil() + 10; 
+    final int count = (range.inMinutes / 5).ceil() + 10;
     
     final url = Uri.parse('${AppConfig.nightscoutApiBaseUrl}/api/v1/entries.json?count=$count');
     try {
@@ -160,7 +166,6 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
-        // Filtrujemy dane, aby tylko te, które są w wybranym zakresie czasowym, zostały zwrócone.
         final DateTime startTime = DateTime.now().subtract(range);
         return data
             .map((json) => SgvEntry.fromJson(json))
@@ -174,23 +179,17 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Sprawdza, czy bieżący odczyt SGV wygenerował alert, i dodaje go do listy.
   void _checkAndGenerateAlerts(SgvEntry sgvEntry) {
     String? alertMessage;
     Color? alertColor;
     String? alertType;
 
-    // Pobieramy aktualne progi glikemii z SettingsService.
-    // Te progi są już przekonwertowane do mg/dL (ponieważ sgvEntry.sgv jest w mg/dL).
-    final double highThreshold = _settingsService.highGlucoseThresholdMgDl; // Użyj wartości przechowywanych w mg/dL
-    final double lowThreshold = _settingsService.lowGlucoseThresholdMgDl;   // Użyj wartości przechowywanych w mg/dL
+    final double highThreshold = _settingsService.highGlucoseThresholdMgDl;
+    final double lowThreshold = _settingsService.lowGlucoseThresholdMgDl;
     
-    // Konwertujemy wartość SGV odczytu na aktualnie wybraną jednostkę wyświetlania,
-    // aby komunikat alertu był zgodny z jednostkami użytkownika.
     final double sgvValueInCurrentUnit = _settingsService.convertSgvToCurrentUnit(sgvEntry.sgv);
-    final String unitText = _settingsService.currentGlucoseUnit.name; // Nazwa jednostki (mgDl/mmolL)
+    final String unitText = _settingsService.currentGlucoseUnit.name;
 
-    // Sprawdzamy alerty na podstawie wartości SGV w mg/dL (czyli oryginalnej wartości z Nightscout)
     if (sgvEntry.sgv > highThreshold) {
       alertMessage = 'Wysoka glikemia: ${sgvValueInCurrentUnit.toStringAsFixed(unitText == 'mgDl' ? 0 : 1)} $unitText';
       alertColor = Colors.red;
@@ -202,41 +201,55 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     if (alertMessage != null) {
-      _alerts.insert(0, CgmAlert( // Dodaj alert na początek listy
-        message: alertMessage,
-        timestamp: sgvEntry.date,
-        type: alertType!,
-        alertColor: alertColor!,
-      ));
+      // Sprawdzamy, czy ostatni alert tego typu dla tego samego odczytu już istnieje
+      // Aby zapobiec duplikatom alertów przy każdym odświeżeniu dla tej samej wartości.
+      bool isDuplicate = _alerts.any((alert) => 
+        alert.timestamp == sgvEntry.date && 
+        alert.type == alertType && 
+        alert.message == alertMessage
+      );
+
+      if (!isDuplicate) {
+        _alerts.insert(0, CgmAlert(
+          message: alertMessage,
+          timestamp: sgvEntry.date,
+          type: alertType!,
+          alertColor: alertColor!,
+        ));
+        _saveAlerts();
+      }
     }
-    _saveAlerts(); // Zapisz alerty po każdej zmianie (na przyszłość)
   }
 
-  /// Oznacza wszystkie alerty jako przeczytane.
   void markAllAlertsAsRead() {
     for (var alert in _alerts) {
       alert.isRead = true;
     }
     notifyListeners();
-    _saveAlerts(); // Zapisz zmiany
+    _saveAlerts();
   }
 
-  /// Zapisuje aktualną listę alertów do SharedPreferences (na przyszłość, aby były trwałe).
+  /// Usuwa alert z listy.
+  void removeAlert(CgmAlert alert) {
+    _alerts.remove(alert);
+    notifyListeners();
+    _saveAlerts();
+  }
+
   Future<void> _saveAlerts() async {
     final prefs = await SharedPreferences.getInstance();
     final List<String> alertsJson = _alerts.map((alert) => json.encode(alert.toJson())).toList();
     await prefs.setStringList('cgm_alerts', alertsJson);
   }
 
-  /// Ładuje alerty z SharedPreferences (na przyszłość, aby były trwałe po restarcie).
   Future<void> _loadAlerts() async {
     final prefs = await SharedPreferences.getInstance();
     final List<String>? alertsJson = prefs.getStringList('cgm_alerts');
     if (alertsJson != null) {
       _alerts = alertsJson.map((jsonString) => CgmAlert.fromJson(json.decode(jsonString))).toList();
     }
-    // Ustaw _lastProcessedSgvTimestamp po załadowaniu alertów,
-    // aby uniknąć duplikatów przy restarcie aplikacji.
+    // Ustaw _lastProcessedSgvTimestamp na najnowszy timestamp z załadowanych alertów,
+    // aby uniknąć ponownego generowania alertów dla już przetworzonych danych po restarcie aplikacji.
     if (_alerts.isNotEmpty) {
       _lastProcessedSgvTimestamp = _alerts.first.timestamp;
     }
