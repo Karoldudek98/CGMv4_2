@@ -1,8 +1,10 @@
+// lib/screens/chart_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import 'dart:math';
+import 'dart:async'; // ZMIANA: Importujemy Timer
 
 import 'package:cgmv4/services/nightscout_data_service.dart';
 import 'package:cgmv4/config/app_config.dart';
@@ -14,51 +16,85 @@ class ChartScreen extends StatefulWidget {
   State<ChartScreen> createState() => _ChartScreenState();
 }
 
-class _ChartScreenState extends State<ChartScreen> {
+class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver { // ZMIANA: Dodajemy WidgetsBindingObserver
   late Future<List<SgvEntry>> _historicalDataFuture;
   int _selectedTimeRangeHours = 24; // Domyślnie 24 godziny
+  Timer? _refreshTimer; // ZMIANA: Deklaracja timera
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // ZMIANA: Dodajemy obserwatora cyklu życia aplikacji
     _fetchChartData();
+    _startRefreshTimer(); // ZMIANA: Rozpoczynamy timer
+  }
+
+  @override
+  void dispose() {
+    _stopRefreshTimer(); // ZMIANA: Zatrzymujemy timer
+    WidgetsBinding.instance.removeObserver(this); // ZMIANA: Usuwamy obserwatora
+    super.dispose();
+  }
+
+  // ZMIANA: Obsługa cyklu życia aplikacji (przełączanie między ekranami)
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _fetchChartData();
+      _startRefreshTimer();
+    } else if (state == AppLifecycleState.paused) {
+      _stopRefreshTimer();
+    }
+  }
+
+  // ZMIANA: Metody do zarządzania timerem
+  void _startRefreshTimer() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(AppConfig.refreshDuration, (timer) {
+      _fetchChartData();
+    });
+  }
+
+  void _stopRefreshTimer() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
   }
 
   void _fetchChartData() {
+    // print('Fetching chart data for $_selectedTimeRangeHours hours...'); // Debug
     setState(() {
-      // Pobieramy dane historyczne dla wybranego zakresu czasu (np. 2h, 8h, 16h, 24h)
       _historicalDataFuture = Provider.of<NightscoutDataService>(context, listen: false)
           .fetchHistoricalData(Duration(hours: _selectedTimeRangeHours));
     });
   }
 
-  void _reloadHistoricalData() {
+  // ZMIANA: Zmieniona nazwa funkcji, by była bardziej opisowa, skoro wywołuje ją przycisk ręcznego odświeżania.
+  void _handleRefreshButtonPress() {
     _fetchChartData();
   }
 
+
   @override
   Widget build(BuildContext context) {
-    // Pobieramy szerokość ekranu
     final double screenWidth = MediaQuery.of(context).size.width;
-    // Definiujemy stałe marginesy poziome dla wykresu
-    const double horizontalPadding = 16.0; // Padding wewnątrz SingleChildScrollView
-    const double chartHorizontalMargin = 32.0; // Całkowity margines na zewnątrz wykresu (lewy + prawy padding Scaffold)
+    const double horizontalPadding = 16.0;
+    const double chartHorizontalMargin = 32.0;
 
-    // Obliczamy szerokość dostępną dla samego wykresu, gdy wyświetlamy 2 godziny danych
     final double baseChartDisplayWidth = screenWidth - chartHorizontalMargin;
-    
-    // Obliczamy stały współczynnik "pikseli na godzinę".
-    // Dla 2 godzin wykres ma dokładnie wypełniać dostępną szerokość.
     final double pixelsPerHour = baseChartDisplayWidth / 2.0; 
-
-    // Obliczamy ostateczną szerokość zawartości wykresu. 
-    // Dłuższe zakresy (8h, 16h, 24h) będą proporcjonalnie szersze i przewijalne.
     final double chartContentWidth = _selectedTimeRangeHours * pixelsPerHour;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Wykres Glikemii'),
         centerTitle: true,
+        actions: [
+          // ZMIANA: Dodajemy przycisk odświeżania na App Bar
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _handleRefreshButtonPress, // Wywołanie ręcznego odświeżenia
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -99,7 +135,7 @@ class _ChartScreenState extends State<ChartScreen> {
                           ),
                           const SizedBox(height: 20),
                           ElevatedButton(
-                            onPressed: _reloadHistoricalData,
+                            onPressed: _handleRefreshButtonPress, // ZMIANA: Wywołanie ręcznego odświeżenia
                             child: const Text('Spróbuj ponownie'),
                           ),
                         ],
@@ -122,7 +158,7 @@ class _ChartScreenState extends State<ChartScreen> {
                           ),
                           const SizedBox(height: 20),
                           ElevatedButton(
-                            onPressed: _reloadHistoricalData,
+                            onPressed: _handleRefreshButtonPress, // ZMIANA: Wywołanie ręcznego odświeżenia
                             child: const Text('Odśwież wykres'),
                           ),
                         ],
@@ -131,25 +167,18 @@ class _ChartScreenState extends State<ChartScreen> {
                   );
                 } else {
                   final List<SgvEntry> data = snapshot.data!;
-
-                  // Sortowanie danych, choć Nightscout API powinno już zwracać posortowane
                   data.sort((a, b) => a.date.compareTo(b.date));
 
-                  // Jeśli dane są puste, nadal obsługa błędu
                   if (data.isEmpty) {
                     return const Center(child: Text('Brak danych do wyświetlenia wykresu.'));
                   }
                   
-                  // Ustalanie zakresów osi Y (glikemii) dynamicznie
-                  // Zapewnij minimum 0 dla osi Y i dodaj bufor 10 jednostek
                   final double minY = (data.map((e) => e.sgv).reduce(min) - 10).floorToDouble();
                   final double maxY = (data.map((e) => e.sgv).reduce(max) + 10).ceilToDouble();
 
-                  // Ustalanie zakresów osi X (czasu) - KLUCZOWE: od teraz minus zakres, do teraz
                   final double minX = DateTime.now().subtract(Duration(hours: _selectedTimeRangeHours)).millisecondsSinceEpoch.toDouble();
                   final double maxX = DateTime.now().millisecondsSinceEpoch.toDouble();
 
-                  // Konwersja danych SGV na punkty FlSpot dla wykresu
                   List<FlSpot> spots = data.map((entry) {
                     return FlSpot(
                       entry.date.millisecondsSinceEpoch.toDouble(),
@@ -160,7 +189,7 @@ class _ChartScreenState extends State<ChartScreen> {
                   return SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: SizedBox(
-                      width: chartContentWidth, // Używamy dynamicznie obliczonej szerokości
+                      width: chartContentWidth,
                       child: Padding(
                         padding: const EdgeInsets.all(horizontalPadding),
                         child: LineChart(
@@ -192,31 +221,27 @@ class _ChartScreenState extends State<ChartScreen> {
                                     String format;
                                     int intervalMinutes;
                                     
-                                    // Dostosowanie interwałów wyświetlania etykiet w zależności od zakresu czasu
                                     if (_selectedTimeRangeHours <= 2) {
-                                      intervalMinutes = 15; // Co 15 minut dla 2h
+                                      intervalMinutes = 15;
                                     } else if (_selectedTimeRangeHours <= 8) {
-                                      intervalMinutes = 60; // Co 1 godzinę dla 8h
+                                      intervalMinutes = 60;
                                     } else if (_selectedTimeRangeHours <= 16) {
-                                      intervalMinutes = 120; // Co 2 godziny dla 16h
-                                    } else { // 24h
-                                      intervalMinutes = 240; // Co 4 godziny dla 24h
+                                      intervalMinutes = 120;
+                                    } else {
+                                      intervalMinutes = 240;
                                     }
 
-                                    // Sprawdź, czy czas jest wielokrotnością interwału
-                                    // Dodatkowo, zawsze wyświetlaj pierwszy i ostatni punkt na osi X
-                                    bool isFirstOrLast = (value - minX).abs() < 1000 || (value - maxX).abs() < 1000; // Tolerancja dla float
+                                    bool isFirstOrLast = (value - minX).abs() < 1000 || (value - maxX).abs() < 1000;
                                     bool isIntervalMark = dateTime.minute % intervalMinutes == 0 && dateTime.second == 0;
 
                                     if (isIntervalMark || isFirstOrLast) {
-                                      // Jeśli czas jest blisko pełnej godziny, użyj HH:00, inaczej HH:mm
                                       if (dateTime.minute == 0 && dateTime.second == 0) {
-                                         format = DateFormat('HH:00').format(dateTime.toLocal());
+                                          format = DateFormat('HH:00').format(dateTime.toLocal());
                                       } else {
-                                         format = DateFormat('HH:mm').format(dateTime.toLocal());
+                                          format = DateFormat('HH:mm').format(dateTime.toLocal());
                                       }
                                     } else {
-                                      return const SizedBox.shrink(); // Ukryj etykietę
+                                      return const SizedBox.shrink();
                                     }
 
                                     return SideTitleWidget(
@@ -234,24 +259,21 @@ class _ChartScreenState extends State<ChartScreen> {
                                 sideTitles: SideTitles(
                                   showTitles: true,
                                   getTitlesWidget: (value, meta) {
-                                    // Wyświetlaj etykiety co 25 jednostek
-                                    // Dodatkowo, zawsze wyświetlaj etykiety dla linii progowych, jeśli są blisko
                                     final bool isThresholdHigh = (value - AppConfig.highGlucoseThreshold).abs() < 5;
                                     final bool isThresholdLow = (value - AppConfig.lowGlucoseThreshold).abs() < 5;
 
                                     if (value % 25 == 0 || isThresholdHigh || isThresholdLow) {
-                                      // Zapewnij, że etykieta nie będzie ujemna, jeśli minY jest niższe
                                       final int displayValue = value.toInt();
-                                      if (displayValue < 0) return const SizedBox.shrink(); // Ukryj ujemne etykiety
+                                      if (displayValue < 0) return const SizedBox.shrink();
                                       
                                       return Text(
                                         displayValue.toString(),
                                         style: const TextStyle(fontSize: 10, color: Colors.black54),
                                       );
                                     }
-                                    return const SizedBox.shrink(); // Ukryj pozostałe etykiety
+                                    return const SizedBox.shrink();
                                   },
-                                  interval: 25, // Ustaw interwał co 25 jednostek
+                                  interval: 25,
                                   reservedSize: 40,
                                 ),
                               ),
@@ -264,7 +286,7 @@ class _ChartScreenState extends State<ChartScreen> {
                             ),
                             minX: minX,
                             maxX: maxX,
-                            minY: minY < 0 ? 0 : minY, // Zapewnij, że min Y nie będzie ujemne
+                            minY: minY < 0 ? 0 : minY,
                             maxY: maxY,
                             lineBarsData: [
                               LineChartBarData(
@@ -325,7 +347,7 @@ class _ChartScreenState extends State<ChartScreen> {
           setState(() {
             _selectedTimeRangeHours = hours;
           });
-          _fetchChartData();
+          _fetchChartData(); // Nadal wywołujemy _fetchChartData przy zmianie zakresu
         },
         style: ElevatedButton.styleFrom(
           backgroundColor: _selectedTimeRangeHours == hours ? Colors.blue : Colors.grey,

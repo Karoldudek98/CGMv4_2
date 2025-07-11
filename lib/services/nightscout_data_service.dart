@@ -5,14 +5,16 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:cgmv4/config/app_config.dart';
 import 'package:cgmv4/models/cgm_alert.dart';
-import 'package:intl/intl.dart'; // Nadal przydatne, ale nie do formatowania URL
+import 'package:intl/intl.dart';
 
 class SgvEntry {
   final double sgv;
   final DateTime date;
   final int trend;
+  final String? direction;
+  final double? delta; // NOWE: Pole do przechowywania wartości delty bezpośrednio z API
 
-  SgvEntry({required this.sgv, required this.date, required this.trend});
+  SgvEntry({required this.sgv, required this.date, required this.trend, this.direction, this.delta});
 
   factory SgvEntry.fromJson(Map<String, dynamic> json) {
     DateTime entryDate;
@@ -21,19 +23,26 @@ class SgvEntry {
     } else if (json['date'] != null) {
       entryDate = DateTime.fromMillisecondsSinceEpoch(json['date'] as int);
     } else {
-      entryDate = DateTime.now(); // Fallback
+      entryDate = DateTime.now(); // Fallback dla daty
     }
 
     return SgvEntry(
       sgv: (json['sgv'] as num).toDouble(),
       date: entryDate,
       trend: (json['trend'] as num?)?.toInt() ?? 0,
+      direction: json['direction'] as String?,
+      delta: (json['delta'] as num?)?.toDouble(), // ZMIANA: Parsujemy 'delta' bezpośrednio
     );
   }
 }
 
 class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
   SgvEntry? _latestSgv;
+  // ZMIANA: Usuwamy _glucoseDelta, ponieważ będziemy odczytywać je bezpośrednio z SgvEntry
+  // double? _glucoseDelta; 
+  // ZMIANA: Usuwamy _previousSgv, ponieważ nie jest już potrzebny do obliczeń delty
+  // SgvEntry? _previousSgv;
+
   bool _isLoading = false;
   Timer? _refreshTimer;
 
@@ -43,6 +52,8 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
   static const Duration _signalLossThreshold = Duration(minutes: 15);
 
   SgvEntry? get latestSgv => _latestSgv;
+  // ZMIANA: Getter dla delty będzie teraz pochodził bezpośrednio z latestSgv
+  double? get glucoseDelta => _latestSgv?.delta;
   bool get isLoading => _isLoading;
   List<CgmAlert> get alerts => List.unmodifiable(_alerts);
   bool get hasUnreadAlerts => _alerts.any((alert) => !alert.isRead);
@@ -85,18 +96,7 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
       final nightscoutBaseUrl = AppConfig.nightscoutUrl;
       final apiSecret = AppConfig.apiSecret;
 
-      if (nightscoutBaseUrl.isEmpty || apiSecret.isEmpty ||
-          nightscoutBaseUrl == 'https://YOUR_NIGHTSCOUT_URL.herokuapp.com/' ||
-          apiSecret == 'YOUR_API_SECRET') {
-        _addAlertIfNeeded(CgmAlert(
-          type: AlertType.signalLoss,
-          timestamp: DateTime.now(),
-          message: 'Błąd konfiguracji: Nightscout URL lub API Secret nie ustawione! Skontaktuj się z deweloperem.',
-        ));
-        _latestSgv = null;
-        return;
-      }
-
+      // ZMIANA: Teraz pobieramy tylko JEDEN najnowszy wpis, bo delta jest już w nim zawarta
       final String fullApiUrl = '${nightscoutBaseUrl}api/v1/entries/sgv.json?count=1&token=$apiSecret';
 
       print('Attempting to fetch data from URL: $fullApiUrl');
@@ -110,10 +110,18 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
         final List<dynamic> data = json.decode(response.body);
         if (data.isNotEmpty) {
           _latestSgv = SgvEntry.fromJson(data[0]);
+          
+          // ZMIANA: Usuwamy logikę obliczania delty, ponieważ jest ona pobierana z API
+          // _previousSgv = null; // Nie jest już potrzebne
+          // _glucoseDelta = null; // Nie jest już potrzebne
+
           _checkGlucoseAlerts(_latestSgv!);
           _checkSignalLossAlert(_latestSgv!.date);
         } else {
           _latestSgv = null;
+          // ZMIANA: Resetujemy deltę, jeśli nie ma danych
+          // _previousSgv = null; 
+          // _glucoseDelta = null; 
           _checkSignalLossAlert(null);
           _addAlertIfNeeded(CgmAlert(
             type: AlertType.signalLoss,
@@ -124,6 +132,9 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
         }
       } else {
         _latestSgv = null;
+        // ZMIANA: Resetujemy deltę w przypadku błędu
+        // _previousSgv = null;
+        // _glucoseDelta = null;
         _addAlertIfNeeded(CgmAlert(
           type: AlertType.signalLoss,
           timestamp: DateTime.now(),
@@ -133,6 +144,9 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
       }
     } on TimeoutException {
       _latestSgv = null;
+      // ZMIANA: Resetujemy deltę w przypadku timeoutu
+      // _previousSgv = null;
+      // _glucoseDelta = null;
       _addAlertIfNeeded(CgmAlert(
         type: AlertType.signalLoss,
         timestamp: DateTime.now(),
@@ -141,6 +155,9 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
       print('TimeoutException: Could not connect to Nightscout.');
     } catch (e) {
       _latestSgv = null;
+      // ZMIANA: Resetujemy deltę w przypadku ogólnego błędu
+      // _previousSgv = null;
+      // _glucoseDelta = null;
       _addAlertIfNeeded(CgmAlert(
         type: AlertType.signalLoss,
         timestamp: DateTime.now(),
@@ -175,10 +192,6 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _checkSignalLossAlert(DateTime? lastSgvDate) {
-    if (AppConfig.nightscoutUrl.isEmpty || AppConfig.apiSecret.isEmpty || AppConfig.nightscoutUrl == 'https://YOUR_NIGHTSCOUT_URL.herokuapp.com/' || AppConfig.apiSecret == 'YOUR_API_SECRET') {
-      return;
-    }
-
     final now = DateTime.now();
     if (lastSgvDate == null || now.difference(lastSgvDate) > _signalLossThreshold) {
       _addAlertIfNeeded(CgmAlert(
@@ -242,26 +255,17 @@ class NightscoutDataService extends ChangeNotifier with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // ZMIANA: fetchHistoricalData - używamy timestampów w milisekundach
   Future<List<SgvEntry>> fetchHistoricalData(Duration timeRange) async {
     final nightscoutBaseUrl = AppConfig.nightscoutUrl;
     final apiSecret = AppConfig.apiSecret;
-
-    if (nightscoutBaseUrl.isEmpty || apiSecret.isEmpty || nightscoutBaseUrl == 'https://YOUR_NIGHTSCOUT_URL.herokuapp.com/' || apiSecret == 'YOUR_API_SECRET') {
-      throw Exception('Nightscout URL lub API Secret nie ustawione. Skontaktuj się z deweloperem.');
-    }
 
     try {
       final now = DateTime.now();
       final startTime = now.subtract(timeRange);
 
-      // KLUCZOWA ZMIANA: Używamy timestampów w milisekundach
       final int startTimeMillis = startTime.millisecondsSinceEpoch;
       final int endTimeMillis = now.millisecondsSinceEpoch;
 
-      // ZMIANA URL: Używamy timestampów w parametrach find[date][$gte] i find[date][$lte]
-      // Dodatkowo, dodajemy 'sort$desc=date' aby mieć najnowsze dane na początku (opcjonalnie, ale pomocne)
-      // oraz 'count=10000' aby Nightscout zwrócił wszystkie dostępne dane w zakresie.
       final String fullApiUrl = '${nightscoutBaseUrl}api/v1/entries/sgv.json?'
                                 'find[date][\$gte]=$startTimeMillis&'
                                 'find[date][\$lte]=$endTimeMillis&'
