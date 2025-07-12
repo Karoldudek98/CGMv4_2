@@ -1,4 +1,5 @@
 // lib/screens/chart_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -12,7 +13,6 @@ import 'package:cgmv4/models/sgv_entry.dart';
 import 'package:cgmv4/services/settings_service.dart';
 import 'package:cgmv4/models/glucose_unit.dart';
 
-/// Ekran wyświetlający wykres historycznych danych glikemii.
 class ChartScreen extends StatefulWidget {
   const ChartScreen({super.key});
 
@@ -22,77 +22,71 @@ class ChartScreen extends StatefulWidget {
 
 class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
   late Future<List<SgvEntry>> _historicalDataFuture;
-  int _selectedTimeRangeHours = 24; // Domyślny zakres to 24 godziny
+  int _selectedTimeRangeHours = 2;
   Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Nasłuchuj zmian w SettingsService, aby odświeżać wykres po zmianie jednostek/progów
     Provider.of<SettingsService>(context, listen: false).addListener(_onSettingsChanged);
-    _fetchChartData(); // Pierwsze pobranie danych dla wykresu
-    _startRefreshTimer(); // Uruchomienie timera odświeżania
+    _fetchChartData();
+    _startRefreshTimer();
   }
 
   @override
   void dispose() {
     Provider.of<SettingsService>(context, listen: false).removeListener(_onSettingsChanged);
-    _stopRefreshTimer(); // Zatrzymaj timer, gdy ekran jest zwalniany
+    _stopRefreshTimer();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   void _onSettingsChanged() {
-    // Odśwież dane wykresu, gdy zmienią się ustawienia (np. jednostki glikemii)
     _fetchChartData();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Po wznowieniu aplikacji, odśwież dane i uruchom timer
       _fetchChartData();
       _startRefreshTimer();
     } else if (state == AppLifecycleState.paused) {
-      // Gdy aplikacja jest w tle, zatrzymaj timer
       _stopRefreshTimer();
     }
   }
 
   void _startRefreshTimer() {
-    _refreshTimer?.cancel(); // Anuluj poprzedni timer, jeśli istnieje
+    _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(AppConfig.refreshDuration, (timer) {
-      _fetchChartData(); // Odśwież dane cyklicznie
+      _fetchChartData();
     });
   }
 
   void _stopRefreshTimer() {
-    _refreshTimer?.cancel(); // Anuluj timer
+    _refreshTimer?.cancel();
     _refreshTimer = null;
   }
 
   void _fetchChartData() {
     setState(() {
-      // Ustawia future do pobierania danych historycznych na podstawie wybranego zakresu czasu
       _historicalDataFuture = Provider.of<NightscoutDataService>(context, listen: false)
           .fetchHistoricalData(Duration(hours: _selectedTimeRangeHours));
     });
   }
 
   void _handleRefreshButtonPress() {
-    _fetchChartData(); // Ręczne odświeżenie danych
+    _fetchChartData();
   }
 
-  /// Buduje przycisk do wyboru zakresu czasu dla wykresu.
   Widget _buildTimeRangeButton(String text, int hours) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4.0),
       child: OutlinedButton(
         onPressed: () {
           setState(() {
-            _selectedTimeRangeHours = hours; // Zmień wybrany zakres czasu
-            _fetchChartData(); // Pobierz dane dla nowego zakresu
+            _selectedTimeRangeHours = hours;
+            _fetchChartData(); 
           });
         },
         style: OutlinedButton.styleFrom(
@@ -110,20 +104,17 @@ class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
     final double screenWidth = MediaQuery.of(context).size.width;
     const double horizontalPadding = 16.0;
 
-    // Szerokość dostępna dla wykresu (z uwzględnieniem paddingu bocznego dla ekranu)
     final double availableWidth = screenWidth - (2 * horizontalPadding);
 
-    // Obliczamy chartContentWidth, tak aby wykres dla 2h był idealnie szerokości ekranu,
-    // a dla dłuższych zakresów używał proporcjonalnej szerokości, ale nie mniej niż szerokość ekranu.
+
     final double chartContentWidth;
     if (_selectedTimeRangeHours <= 2) {
-      chartContentWidth = availableWidth; // Wykres 2-godzinny zawsze na całą szerokość ekranu
+      chartContentWidth = availableWidth;
     } else {
-      // Współczynnik pikseli na godzinę dla pozostałych zakresów
       double pixelsPerHour;
-      if (_selectedTimeRangeHours <= 8) { // Dla 8h, trochę więcej (np. 100px/h)
+      if (_selectedTimeRangeHours <= 8) {
         pixelsPerHour = 100.0;
-      } else { // Dla dłuższych zakresów, standardowo (np. 50px/h)
+      } else {
         pixelsPerHour = 50.0;
       }
       chartContentWidth = max(_selectedTimeRangeHours * pixelsPerHour, availableWidth);
@@ -203,7 +194,7 @@ class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
                           const SizedBox(height: 20),
                           ElevatedButton(
                             onPressed: _handleRefreshButtonPress,
-                            child: const Text('Odśwież wykres'),
+                            child: const Text('Odśwież'),
                           ),
                         ],
                       ),
@@ -213,40 +204,35 @@ class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
                   return Consumer<SettingsService>(
                     builder: (context, settingsService, child) {
                       final List<SgvEntry> data = snapshot.data!;
-                      data.sort((a, b) => a.date.compareTo(b.date)); // Upewnij się, że dane są posortowane chronologicznie
+                      data.sort((a, b) => a.date.compareTo(b.date));
 
                       final List<double> convertedSgvs = data.map((e) => settingsService.convertSgvToCurrentUnit(e.sgv)).toList();
                       
-                      // Oblicz min i max wartości SGV dla osi Y, z pewnym marginesem.
                       final double minY = (convertedSgvs.reduce(min) - 10).floorToDouble();
                       final double maxY = (convertedSgvs.reduce(max) + 10).ceilToDouble();
 
-                      // Oblicz min i max czasu dla osi X
                       final double minX = data.first.date.millisecondsSinceEpoch.toDouble();
                       final double maxX = data.last.date.millisecondsSinceEpoch.toDouble();
 
                       List<FlSpot> spots = [];
                       for (int i = 0; i < data.length; i++) {
                         spots.add(FlSpot(
-                          data[i].date.millisecondsSinceEpoch.toDouble(), // Czas w milisekundach jako X
-                          convertedSgvs[i], // Wartość SGV w aktualnej jednostce jako Y
+                          data[i].date.millisecondsSinceEpoch.toDouble(),
+                          convertedSgvs[i],
                         ));
                       }
 
                       return SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: SizedBox(
-                          width: chartContentWidth, // Dynamiczna szerokość wykresu
-                          height: 300, // Stała wysokość wykresu
+                          width: chartContentWidth,
+                          height: 300,
                           child: Padding(
                             padding: const EdgeInsets.only(right: horizontalPadding, left: horizontalPadding / 2, top: 20, bottom: 20),
                             child: LineChart(
                               LineChartData(
-                                // Dotknięcie wykresu
                                 lineTouchData: const LineTouchData(enabled: true),
-                                // Linie siatki
                                 gridData: const FlGridData(show: true),
-                                // Tytuły osi (etykiety)
                                 titlesData: FlTitlesData(
                                   show: true,
                                   bottomTitles: AxisTitles(
@@ -254,15 +240,11 @@ class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
                                       showTitles: true,
                                       getTitlesWidget: (value, meta) {
                                         final dateTime = DateTime.fromMillisecondsSinceEpoch(value.toInt());
-                                        // Formatowanie daty dla osi X (godzina:minuta)
                                         return Padding(
                                           padding: const EdgeInsets.only(top: 8.0),
                                           child: Text(DateFormat('HH:mm').format(dateTime), style: const TextStyle(fontSize: 10)),
                                         );
                                       },
-                                      // Dynamika interwału: co ile milisekund wyświetlać etykietę.
-                                      // Używamy max, aby interwał był co najmniej co godzinę,
-                                      // a następnie zwiększamy go dla dłuższych zakresów.
                                       interval: max(1.0, (_selectedTimeRangeHours / 6)).ceil() * 60 * 60 * 1000,
                                       reservedSize: 30,
                                     ),
@@ -271,35 +253,31 @@ class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
                                     sideTitles: SideTitles(
                                       showTitles: true,
                                       getTitlesWidget: (value, meta) {
-                                        // Formatowanie wartości dla osi Y
                                         return Text(value.toStringAsFixed(0), style: const TextStyle(fontSize: 10));
                                       },
-                                      interval: (maxY - minY) / 5, // Dzielimy zakres Y na 5 interwałów
+                                      interval: (maxY - minY) / 5,
                                       reservedSize: 40,
                                     ),
                                   ),
                                   topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                                   rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                                 ),
-                                // Ramka wykresu
                                 borderData: FlBorderData(
                                   show: true,
                                   border: Border.all(color: const Color(0xff37434d), width: 1),
                                 ),
-                                // Zakresy osi
                                 minX: minX,
                                 maxX: maxX,
                                 minY: minY,
                                 maxY: maxY,
-                                // Dane linii
                                 lineBarsData: [
                                   LineChartBarData(
                                     spots: spots,
-                                    isCurved: false, // Proste linie między punktami
-                                    color: Colors.blue, // Kolor linii glikemii
+                                    isCurved: false,
+                                    color: Colors.blue,
                                     barWidth: 2,
                                     isStrokeCapRound: true,
-                                    dotData: const FlDotData(show: false), // Nie pokazuj kropek na linii
+                                    dotData: const FlDotData(show: false),
                                     belowBarData: BarAreaData(
                                       show: true,
                                       gradient: LinearGradient(
@@ -313,13 +291,11 @@ class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 ],
-                                // Linie progów glikemii
                                 extraLinesData: ExtraLinesData(
                                   horizontalLines: [
-                                    // Linia niskiej glikemii
                                     HorizontalLine(
                                       y: settingsService.lowGlucoseThreshold,
-                                      color: Colors.orange,
+                                      color: const Color.fromARGB(255, 255, 0, 0),
                                       strokeWidth: 2,
                                       dashArray: [5, 5], // Przerywana linia
                                       label: HorizontalLineLabel(
@@ -333,7 +309,7 @@ class _ChartScreenState extends State<ChartScreen> with WidgetsBindingObserver {
                                     // Linia wysokiej glikemii
                                     HorizontalLine(
                                       y: settingsService.highGlucoseThreshold,
-                                      color: Colors.red,
+                                      color: const Color.fromARGB(255, 255, 187, 0),
                                       strokeWidth: 2,
                                       dashArray: [5, 5],
                                       label: HorizontalLineLabel(

@@ -1,4 +1,5 @@
 // lib/screens/alerts_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -6,7 +7,6 @@ import 'package:intl/intl.dart';
 import 'package:cgmv4/services/nightscout_data_service.dart';
 import 'package:cgmv4/models/cgm_alert.dart';
 
-/// Ekran wyświetlający listę alertów glikemii.
 class AlertsScreen extends StatelessWidget {
   const AlertsScreen({super.key});
 
@@ -19,7 +19,9 @@ class AlertsScreen extends StatelessWidget {
       ),
       body: Consumer<NightscoutDataService>(
         builder: (context, nightscoutService, child) {
-          if (nightscoutService.alerts.isEmpty) {
+          final List<CgmAlert> alertsToDisplay = nightscoutService.activeAlerts;
+
+          if (alertsToDisplay.isEmpty) {
             return const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -27,7 +29,7 @@ class AlertsScreen extends StatelessWidget {
                   Icon(Icons.notifications_off, color: Colors.grey, size: 80),
                   SizedBox(height: 20),
                   Text(
-                    'Brak aktywnych alertów.',
+                    'Brak alertów.',
                     style: TextStyle(fontSize: 20, color: Colors.grey),
                     textAlign: TextAlign.center,
                   ),
@@ -38,26 +40,24 @@ class AlertsScreen extends StatelessWidget {
 
           return ListView.builder(
             padding: const EdgeInsets.all(8.0),
-            itemCount: nightscoutService.alerts.length,
+            itemCount: alertsToDisplay.length,
             itemBuilder: (context, index) {
-              final CgmAlert alert = nightscoutService.alerts[index];
+              final CgmAlert alert = alertsToDisplay[index];
               return Card(
                 elevation: 2,
                 margin: const EdgeInsets.symmetric(vertical: 8.0),
-                color: alert.alertColor.withOpacity(0.2), // Kolor karty zależny od alertu
+                color: alert.alertColor.withOpacity(0.2),
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // Ikona alertu
                       Icon(
                         alert.type == "LOW" ? Icons.arrow_downward : Icons.arrow_upward,
                         color: alert.alertColor,
                         size: 36,
                       ),
                       const SizedBox(width: 16),
-                      // Treść alertu
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -67,7 +67,7 @@ class AlertsScreen extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color: alert.alertColor.darken(0.2), // Nieco ciemniejszy kolor tekstu
+                                color: alert.alertColor.darken(0.2),
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -78,13 +78,10 @@ class AlertsScreen extends StatelessWidget {
                           ],
                         ),
                       ),
-                      // Przycisk "Usuń"
                       IconButton(
                         icon: const Icon(Icons.delete_forever, color: Colors.grey),
                         onPressed: () {
-                          // Wywołaj metodę usuwającą alert z serwisu
-                          nightscoutService.removeAlert(alert);
-                          // Opcjonalnie: pokaż snackbar z potwierdzeniem usunięcia
+                          nightscoutService.dismissAlert(alert);
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('Alert usunięty')),
                           );
@@ -102,7 +99,6 @@ class AlertsScreen extends StatelessWidget {
   }
 }
 
-// Rozszerzenie dla Color, aby móc nieco przyciemnić kolor tekstu alertu
 extension ColorExtension on Color {
   Color darken([double amount = .1]) {
     assert(amount >= 0 && amount <= 1);

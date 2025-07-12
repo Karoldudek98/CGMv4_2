@@ -1,4 +1,5 @@
 // lib/screens/home_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -7,7 +8,6 @@ import 'package:cgmv4/services/nightscout_data_service.dart';
 import 'package:cgmv4/services/settings_service.dart';
 import 'package:cgmv4/models/glucose_unit.dart';
 
-/// Ekran główny wyświetlający aktualną wartość glikemii i powiązane informacje.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -35,28 +35,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// Mapuje tekstowy kierunek glikemii na symbol strzałki Unicode.
   String _mapDirectionToArrow(String direction) {
     switch (direction.toLowerCase()) {
       case 'doubleup':
-        return '⇈'; // Podwójny wzrost
+        return '⇈';
       case 'singleup':
-        return '↑'; // Pojedynczy wzrost
+        return '↑';
       case 'fortyfiveup':
-        return '↗'; // Wzrost pod kątem 45 stopni
+        return '↗';
       case 'flat':
-        return '→'; // Płasko
+        return '→';
       case 'fortyfivedown':
-        return '↘'; // Spadek pod kątem 45 stopni
+        return '↘';
       case 'singledown':
-        return '↓'; // Pojedynczy spadek
+        return '↓';
       case 'doubledown':
-        return '⇊'; // Podwójny spadek
+        return '⇊';
       case 'not computable':
       case 'none':
       case 'unknown':
       default:
-        return ''; // Brak symbolu dla nieznanych
+        return '?';
     }
   }
 
@@ -78,10 +77,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       body: Consumer2<NightscoutDataService, SettingsService>(
         builder: (context, nightscoutService, settingsService, child) {
           if (nightscoutService.isLoading && nightscoutService.latestSgv == null) {
-            // Wyświetlaj CircularProgressIndicator tylko, gdy nic nie ma i trwa ładowanie
             return const Center(child: CircularProgressIndicator());
           } else if (nightscoutService.errorMessage != null && nightscoutService.latestSgv == null) {
-            // Wyświetlaj błąd tylko, gdy nic nie ma i jest błąd
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -107,9 +104,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             );
           } else if (nightscoutService.latestSgv == null) {
-            // Gdy nie ma danych i nie ma błędu ładowania (np. po restarcie przed pierwszym pobraniem)
-            // Uruchomienie fetchNightscoutData() w initState powinno to obsłużyć,
-            // ale ten stan może wystąpić, jeśli Nightscout jest pusty.
             return const Center(
               child: Padding(
                 padding: EdgeInsets.all(16.0),
@@ -128,7 +122,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             );
           } else {
-            // Mamy dane SGV do wyświetlenia
             final sgvEntry = nightscoutService.latestSgv!;
             final glucoseUnit = settingsService.currentGlucoseUnit;
 
@@ -138,20 +131,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             String deltaText = '';
             if (nightscoutService.glucoseDelta != null) {
               final double displayDelta = settingsService.convertSgvToCurrentUnit(nightscoutService.glucoseDelta!);
-              if (displayDelta != 0.0) { // Tylko jeśli delta nie jest zerowa
-                // Formatowanie delty: znak i zaokrąglenie
+              if (displayDelta != 0.0) {
                 deltaText = ' (${displayDelta > 0 ? '+' : ''}${displayDelta.toStringAsFixed(glucoseUnit == GlucoseUnit.mgDl ? 0 : 1)})';
               }
             }
             
-            // Kolor tła w zależności od wartości SGV względem progów.
             final double lowThreshold = settingsService.lowGlucoseThreshold;
             final double highThreshold = settingsService.highGlucoseThreshold;
             Color backgroundColor;
             if (displaySgv < lowThreshold) {
-              backgroundColor = Colors.orange.shade100;
-            } else if (displaySgv > highThreshold) {
               backgroundColor = Colors.red.shade100;
+            } else if (displaySgv > highThreshold) {
+              backgroundColor = Colors.orange.shade100;
             } else {
               backgroundColor = Colors.green.shade100;
             }
@@ -169,11 +160,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     const SizedBox(height: 10),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.baseline, // Wyrównanie linii bazowej tekstu
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
                       textBaseline: TextBaseline.alphabetic,
                       children: [
                         Text(
-                          _mapDirectionToArrow(sgvEntry.direction), // Strzałka kierunku
+                          _mapDirectionToArrow(sgvEntry.direction),
                           style: const TextStyle(fontSize: 50, color: Colors.black54),
                         ),
                         const SizedBox(width: 10),
@@ -185,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             color: displaySgv < lowThreshold || displaySgv > highThreshold ? Colors.red : Colors.black,
                           ),
                         ),
-                        if (deltaText.isNotEmpty) // Wyświetlaj deltę tylko, jeśli nie jest pusta
+                        if (deltaText.isNotEmpty)
                           Text(
                             deltaText,
                             style: const TextStyle(fontSize: 30, fontWeight: FontWeight.normal, color: Colors.black54),

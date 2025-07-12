@@ -1,38 +1,10 @@
 // lib/screens/main_screen_wrapper.dart
+
 import 'package:flutter/material.dart';
 import 'package:cgmv4/screens/home_screen.dart';
 import 'package:cgmv4/screens/chart_screen.dart';
-import 'package:cgmv4/screens/alerts_screen.dart'; // Import AlertsScreen
-// Importujemy SettingsScreen (placeholder, jeśli jeszcze nie ma fizycznego pliku)
-// Jeśli stworzyłeś osobny plik dla SettingsScreen, usuń placeholder z tego pliku i zaimportuj go stąd
-// W przeciwnym razie, ten placeholder jest OK.
-class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Ustawienia (w budowie)'),
-      ),
-      body: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.settings, size: 80, color: Colors.grey),
-            SizedBox(height: 20),
-            Text(
-              'Ekran ustawień jest jeszcze w budowie.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 18, color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
+import 'package:cgmv4/screens/alerts_screen.dart';
+import 'package:cgmv4/screens/settings_screen.dart';
 
 class MainScreenWrapper extends StatefulWidget {
   const MainScreenWrapper({super.key});
@@ -42,14 +14,13 @@ class MainScreenWrapper extends StatefulWidget {
 }
 
 class _MainScreenWrapperState extends State<MainScreenWrapper> {
-  int _selectedIndex = 0; // Aktualnie wybrany indeks paska nawigacyjnego
+  int _selectedIndex = 0;
 
-  // Lista ekranów, które będą wyświetlane
   static final List<Widget> _widgetOptions = <Widget>[
     const HomeScreen(),
     const ChartScreen(),
-    const AlertsScreen(), // Teraz używamy faktycznego AlertsScreen
-    const SettingsScreen(), // Nadal placeholder
+    const AlertsScreen(),
+    const SettingsScreen(),
   ];
 
   void _onItemTapped(int index) {
@@ -62,7 +33,7 @@ class _MainScreenWrapperState extends State<MainScreenWrapper> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
-        child: _widgetOptions.elementAt(_selectedIndex), // Wyświetla aktualnie wybrany ekran
+        child: _widgetOptions.elementAt(_selectedIndex),
       ),
       bottomNavigationBar: BottomNavigationBar(
         items: const <BottomNavigationBarItem>[
@@ -72,7 +43,7 @@ class _MainScreenWrapperState extends State<MainScreenWrapper> {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.show_chart),
-            label: 'Wykres',
+            label: 'Wykresy',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.notifications),
@@ -83,11 +54,11 @@ class _MainScreenWrapperState extends State<MainScreenWrapper> {
             label: 'Ustawienia',
           ),
         ],
-        currentIndex: _selectedIndex, // Aktywny element
-        selectedItemColor: Colors.blueAccent, // Kolor wybranego elementu
-        unselectedItemColor: Colors.grey, // Kolor niewybranych elementów
-        onTap: _onItemTapped, // Funkcja wywoływana po naciśnięciu elementu
-        type: BottomNavigationBarType.fixed, // Zapobiega zmianie rozmiaru ikon przy naciśnięciu
+        currentIndex: _selectedIndex,
+        selectedItemColor: Colors.blueAccent,
+        unselectedItemColor: Colors.grey,
+        onTap: _onItemTapped,
+        type: BottomNavigationBarType.fixed,
       ),
     );
   }
